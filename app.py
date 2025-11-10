@@ -59,7 +59,6 @@ def handle_message_events(body, logger, client):
 
 @app.command("/leaderboard")
 def show_leaderboard(ack, say, command, client):
-    """Displays the leaderboard when the /leaderboard command is used."""
     ack()
     
     scores = load_scores()
