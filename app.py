@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from dotenv import load_dotenv
@@ -10,7 +11,21 @@ bot_token = os.environ.get("SLACK_BOT_TOKEN")
 print(f"--- Is the bot token loaded? '{bot_token}' ---") # DEBUG LINE
 app = App(token=bot_token)
 SCORES_FILE = "leaderboard_scores.json"
+SNIPED_FILE = "sniped_scores.json"
 TARGET_CHANNEL_ID = "C09LEUNKN30"
+
+# --- Helper functions ---
+def load_json(path):
+    """Loads a JSON file or returns an empty dict if missing."""
+    if not os.path.exists(path):
+        return {}
+    with open(path, "r") as f:
+        return json.load(f)
+
+def save_json(path, data):
+    """Saves data to a JSON file."""
+    with open(path, "w") as f:
+        json.dump(data, f, indent=4)
 
 # --- Data Handling Functions ---
 
@@ -37,14 +52,32 @@ def handle_message_events(body, logger, client):
 
     if channel_id == TARGET_CHANNEL_ID and user_id:
         files = event.get("files", [])
+        text = event.get("text", "")
         is_image_posted = any(file.get("mimetype", "").startswith("image/") for file in files)
 
         if is_image_posted:
-            logger.info(f"Image detected from user {user_id} in channel {channel_id}")
-            scores = load_scores()
-            scores[user_id] = scores.get(user_id, 0) + 1
-            save_scores(scores)
-            # Optional: React to the message to show it was counted
+            # Find mentioned users in the text
+            mentioned_users = re.findall(r"<@([A-Z0-9]+)>", text)
+
+            if not mentioned_users:
+                client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=event["ts"],
+                    text="⚠️ Please tag the person you sniped using @username!"
+                )
+                return
+
+            # Update sniper's score
+            sniper_scores = load_json(SCORES_FILE)
+            sniper_scores[user_id] = sniper_scores.get(user_id, 0) + 1
+            save_json(SCORES_FILE, sniper_scores)
+
+            # Update sniped users’ scores
+            sniped_scores = load_json(SNIPED_FILE)
+            for sniped_id in mentioned_users:
+                sniped_scores[sniped_id] = sniped_scores.get(sniped_id, 0) + 1
+                save_json(SNIPED_FILE, sniped_scores)
+
             try:
                 client.reactions_add(
                     channel=channel_id,
@@ -55,37 +88,38 @@ def handle_message_events(body, logger, client):
                 logger.error(f"Error adding reaction: {e}")
 
 
-# --- Slash Command for Leaderboard ---
-
+# --- /leaderboard (snipers) ---
 @app.command("/leaderboard")
 def show_leaderboard(ack, say, command, client):
     ack()
-    
-    scores = load_scores()
-    
-    if not scores:
-        say("The leaderboard is empty! Start posting images to get on the board.")
-        return
-    sorted_users = sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    leaderboard_text = "*🏆 Image Leaderboard 🏆*\n\n"
-    for i, (user_id, score) in enumerate(sorted_users):
-        try:
-            user_info = client.users_info(user=user_id)
-            user_name = user_info["user"]["profile"]["display_name"] or user_info["user"]["name"]
-            if i == 0:
-                leaderboard_text += f"🥇 1. {user_name}: *{score} points*\n"
-            elif i == 1:
-                leaderboard_text += f"🥈 2. {user_name}: *{score} points*\n"
-            elif i == 2:
-                leaderboard_text += f"🥉 3. {user_name}: *{score} points*\n"
-            else:
-                leaderboard_text += f"   {i + 1}. {user_name}: {score} points\n"
-        
-        except Exception as e:
-            leaderboard_text += f"   {i + 1}. Unknown User ({user_id}): {score} points\n"
-            print(f"Could not fetch user info for {user_id}: {e}")
+    show_scoreboard(say, client, SCORES_FILE, "🏆 *Sniper Leaderboard* 🏆", "snipes")
 
-    say(leaderboard_text)
+# --- /snipedboard (sniped) ---
+@app.command("/snipedboard")
+def show_snipedboard(ack, say, command, client):
+    ack()
+    show_scoreboard(say, client, SNIPED_FILE, "🎯 *Sniped Leaderboard* 🎯", "times caught lacking")
+
+# --- Shared leaderboard display ---
+def show_scoreboard(say, client, file_path, title, unit):
+    scores = load_json(file_path)
+    if not scores:
+        say(f"The {title.lower()} is empty!")
+        return
+
+    sorted_users = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    text = f"{title}\n\n"
+    for i, (uid, score) in enumerate(sorted_users):
+        try:
+            user_info = client.users_info(user=uid)
+            name = user_info["user"]["profile"]["display_name"] or user_info["user"]["name"]
+        except:
+            name = f"Unknown ({uid})"
+        medals = ["🥇", "🥈", "🥉"]
+        medal = medals[i] if i < 3 else "  "
+        text += f"{medal} {i+1}. {name}: *{score} {unit}*\n"
+
+    say(text)
 
 
 # --- Starting the Bot ---
