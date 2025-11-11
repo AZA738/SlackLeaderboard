@@ -27,20 +27,6 @@ def save_json(path, data):
     with open(path, "w") as f:
         json.dump(data, f, indent=4)
 
-# --- Data Handling Functions ---
-
-def load_scores():
-    """Loads scores from the JSON file. If the file doesn't exist, returns an empty dictionary."""
-    if not os.path.exists(SCORES_FILE):
-        return {}
-    with open(SCORES_FILE, "r") as f:
-        return json.load(f)
-
-def save_scores(scores):
-    """Saves the scores dictionary to the JSON file."""
-    with open(SCORES_FILE, "w") as f:
-        json.dump(scores, f, indent=4)
-
 # --- Event Listener for Images ---
 
 @app.event("message")
